@@ -1,64 +1,107 @@
-// Check if the browser supports SpeechRecognition
-const startButton = document.getElementById("startBtn");
-const statusElement = document.getElementById("status");
-const recognizedTextElement = document.getElementById("recognizedText");
+let mediaRecorder;
+let audioChunks = [];
 
-// Check for browser support
-let recognition;
-if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
-  recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-  recognition.lang = 'en-US';
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const status = document.getElementById('status');
+const result = document.getElementById('result');
 
-  recognition.onstart = function() {
-    statusElement.querySelector("span").textContent = "Listening...";
-  };
+startBtn.onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
 
-  recognition.onspeechend = function() {
-    statusElement.querySelector("span").textContent = "Speech Ended";
-    recognition.stop();
-  };
+    mediaRecorder.ondataavailable = event => {
+      audioChunks.push(event.data);
+    };
 
-  recognition.onerror = function(event) {
-    statusElement.querySelector("span").textContent = `Error: ${event.error}`;
-  };
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
 
-  recognition.onresult = function(event) {
-    let transcript = '';
-    let confidence = 0;
+      status.textContent = 'Uploading audio...';
 
-    // Process each result in the event
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        transcript += event.results[i][0].transcript;
-        confidence = event.results[i][0].confidence;
+      const response = await fetch('https://www.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          'authorization': 'b5b3ebd82e53476e9acbfc35ab12f7ff'
+        },
+        body: audioBlob
+      });
+
+      if (!response.ok) {
+        console.error('Upload failed:', await response.text());
+        status.textContent = 'Upload failed!';
+        return;
       }
-    }
 
-    recognizedTextElement.querySelector("span").textContent = transcript;
+      const uploadRes = await response.json();
+      const audioUrl = uploadRes.upload_url;
 
-    // For demonstration, we're showing the confidence as a rough guess
-    // You can adjust this logic based on your needs
-    if (confidence > 0.7) {
-      statusElement.querySelector("span").textContent = "High Confidence";
-    } else {
-      statusElement.querySelector("span").textContent = "Low Confidence";
-    }
+      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+          'authorization': 'b5b3ebd82e53476e9acbfc35ab12f7ff',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          audio_url: audioUrl,
+          speaker_labels: true,
+          entity_detection: true,
+          iab_categories: true,
+          sentiment_analysis: true
+        })
+      });
 
-    // If you want to classify male/female, you can use speech characteristics, but that's a separate task
-  };
+      const transcriptData = await transcriptRes.json();
 
-} else {
-  alert("Your browser does not support Speech Recognition.");
-}
+      let polling = true;
+      while (polling) {
+        await new Promise(res => setTimeout(res, 3000));
+        const pollingRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptData.id}`, {
+          headers: {
+            'authorization': 'b5b3ebd82e53476e9acbfc35ab12f7ff'
+          }
+        });
+        const data = await pollingRes.json();
 
-// Start/Stop listening
-startButton.addEventListener('click', function() {
-  if (statusElement.querySelector("span").textContent === "Not listening") {
-    recognition.start();
-  } else {
-    recognition.stop();
-    statusElement.querySelector("span").textContent = "Stopped listening";
+        if (data.status === 'completed') {
+          result.textContent = detectGenderOrAnimal(data.text);
+          status.textContent = 'Done.';
+          polling = false;
+        } else if (data.status === 'error') {
+          status.textContent = 'Error in processing.';
+          polling = false;
+        }
+      }
+    };
+
+    mediaRecorder.start();
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    status.textContent = 'Recording...';
+
+  } catch (error) {
+    console.error('Could not start recording:', error);
+    status.textContent = 'Microphone access denied or error occurred.';
   }
-});
+};
+
+stopBtn.onclick = () => {
+  mediaRecorder.stop();
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  status.textContent = 'Stopped. Uploading...';
+};
+
+// Keyword-based detection
+function detectGenderOrAnimal(text) {
+  const lowerText = text.toLowerCase();
+  if (lowerText.includes("bark") || lowerText.includes("meow") || lowerText.includes("moo")) {
+    return "Detected: Animal Voice";
+  } else if (lowerText.includes("hello") || lowerText.includes("hi")) {
+    return "Detected: Human Voice (Possibly Male or Female)";
+  } else {
+    return "Detected: Unknown Voice Type";
+  }
+}
