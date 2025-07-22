@@ -1,5 +1,6 @@
 let mediaRecorder;
 let audioChunks = [];
+let isRecording = false;
 
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
@@ -7,6 +8,9 @@ const status = document.getElementById('status');
 const result = document.getElementById('result');
 
 startBtn.onclick = async () => {
+  if (isRecording) return; // prevent double-recording
+  isRecording = true;
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream);
@@ -17,11 +21,11 @@ startBtn.onclick = async () => {
     };
 
     mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-
       status.textContent = 'Uploading audio...';
 
-      const response = await fetch('https://www.assemblyai.com/v2/upload', {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+      const response = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: {
           'authorization': 'b5b3ebd82e53476e9acbfc35ab12f7ff'
@@ -63,10 +67,11 @@ startBtn.onclick = async () => {
             'authorization': 'b5b3ebd82e53476e9acbfc35ab12f7ff'
           }
         });
+
         const data = await pollingRes.json();
 
         if (data.status === 'completed') {
-          result.textContent = detectGenderOrAnimal(data.text);
+          result.textContent = detectVoiceType(data.text); // uses enhanced detection
           status.textContent = 'Done.';
           polling = false;
         } else if (data.status === 'error') {
@@ -84,24 +89,6 @@ startBtn.onclick = async () => {
   } catch (error) {
     console.error('Could not start recording:', error);
     status.textContent = 'Microphone access denied or error occurred.';
+    isRecording = false;
   }
 };
-
-stopBtn.onclick = () => {
-  mediaRecorder.stop();
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
-  status.textContent = 'Stopped. Uploading...';
-};
-
-// Keyword-based detection
-function detectGenderOrAnimal(text) {
-  const lowerText = text.toLowerCase();
-  if (lowerText.includes("bark") || lowerText.includes("meow") || lowerText.includes("moo")) {
-    return "Detected: Animal Voice";
-  } else if (lowerText.includes("hello") || lowerText.includes("hi")) {
-    return "Detected: Human Voice (Possibly Male or Female)";
-  } else {
-    return "Detected: Unknown Voice Type";
-  }
-}
